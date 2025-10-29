@@ -3,14 +3,13 @@ const { MongoClient } = require('mongodb');
 const { v4: uuid } = require('uuid');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
-const path = require('path'); // Only used for express.static path joining, but we don't serve static files here.
+const path = require('path');
 
 const app = express();
 app.use(express.json());
 
-// --- Dependencies Logic Consolidated ---
+// --- Database Connection and Initialization ---
 
-// mongo.js content
 const MONGO_URI = process.env.MONGO_URI;
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin';
@@ -45,14 +44,14 @@ async function initDb() {
       return db;
     })().catch(err => {
       console.error("CRITICAL DB INIT ERROR:", err.message);
-      // Re-throw to propagate the crash error
       throw new Error("Failed to initialize database connection. Check MONGO_URI and IP whitelist."); 
     });
   }
   return initPromise;
 }
 
-// encryption.js content
+// --- Utility Functions (Encryption & User-Agent) ---
+
 function base64Encode(str) {
   return Buffer.from(str).toString('base64');
 }
@@ -61,11 +60,80 @@ function hmacSha256(key, data) {
   return crypto.createHmac('sha256', key).update(data).digest('hex');
 }
 
-// utils.js content
+/**
+ * Generates random variable names for basic obfuscation.
+ */
+function generateRandomVarNames(count) {
+  const names = [];
+  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  
+  for (let i = 0; i < count; i++) {
+    let name = '_';
+    const length = Math.floor(Math.random() * 8) + 8; // 8-16 chars
+    for (let j = 0; j < length; j++) {
+      name += chars[Math.floor(Math.random() * chars.length)];
+    }
+    names.push(name);
+  }
+  return names;
+}
+
+/**
+ * Wraps the raw Lua code in an obfuscated Base64 decoder wrapper.
+ * This is the crucial fix for execution errors.
+ */
+function encryptLuaScript(code) {
+  // 1. Base64 encode the script's core content
+  const base64Code = Buffer.from(code).toString('base64');
+  
+  const varNames = generateRandomVarNames(2);
+  const [v1, v2] = varNames; // v1 holds the payload, v2 holds the decoder function
+
+  // The Pure Lua Decoder uses standard arithmetic, not the unreliable string.gsub patterns.
+  // This is the most reliable way to perform Base64 decoding in various Lua environments.
+  const obfuscated = `
+-- LuaShield Protected Script (Fixed Decoding)
+-- Generated: ${new Date().toISOString()}
+
+local ${v1} = '${base64Code}'
+
+-- Standard Pure Lua Base64 Decoder (Loop-based for reliability)
+local ${v2} = (function()
+    local map = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+    local lookup = {}
+    for i=1, #map do lookup[map:sub(i,i)] = i - 1 end
+
+    return function(b64)
+        local s = ''
+        local i1, i2, i3, i4
+        for i=1, #b64, 4 do
+            i1 = lookup[b64:sub(i, i)]
+            i2 = lookup[b64:sub(i+1, i+1)]
+            i3 = lookup[b64:sub(i+2, i+2)]
+            i4 = lookup[b64:sub(i+3, i+3)]
+            
+            -- Combine 6-bit chunks into 8-bit bytes using arithmetic
+            s = s .. string.char(i1 * 4 + math.floor(i2 / 16))
+            if i3 and b64:sub(i+2, i+2) ~= '=' then
+                s = s .. string.char((i2 % 16) * 16 + math.floor(i3 / 4))
+            end
+            if i4 and b64:sub(i+3, i+3) ~= '=' then
+                s = s .. string.char((i3 % 4) * 64 + i4)
+            end
+        end
+        return s
+    end
+end)()
+
+-- Decode and execute the original script
+loadstring(${v2}(${v1}))()
+`.trim();
+
+  return obfuscated;
+}
+
 /**
  * CHECK IF THE USER-AGENT IS FROM AN ALLOWED EXECUTOR ENVIRONMENT.
- * This function uses the strict browser-blocking logic you requested,
- * updated with the comprehensive list of executor identifiers.
  */
 function isAllowedUA(userAgent) {
   if (!userAgent) {
@@ -76,46 +144,19 @@ function isAllowedUA(userAgent) {
   
   // List of common browser identifiers to block
   const browserPatterns = [
-    'mozilla',
-    'chrome',
-    'safari',
-    'firefox',
-    'edge',
-    'opera',
-    'brave'
+    'mozilla', 'chrome', 'safari', 'firefox',
+    'edge', 'opera', 'brave'
   ];
 
   // Expanded list of allowed executor/client identifiers
   const executorPatterns = [
-    'synapse',
-    'krnl',
-    'fluxus',
-    'script-ware',
-    'scriptware',
-    'sentinel',
-    'electron',
-    'executor',
-    'roblox', // Roblox itself
-    'exploit',
-    // New additions based on your request:
-    'delta',
-    'sirhurt',
-    'xeno',
-    'solara', 
-    'potassium',
-    'bunni',
-    'lx63',
-    'cryptic',
-    'volcano',
-    'wave',
-    'zenith'
+    'synapse', 'krnl', 'fluxus', 'script-ware', 'scriptware', 'sentinel',
+    'electron', 'executor', 'roblox', 'exploit', 'delta', 'sirhurt',
+    'xeno', 'solara', 'potassium', 'bunni', 'lx63', 'cryptic',
+    'volcano', 'wave', 'zenith'
   ];
 
-  // 1. Check if it looks like a browser
   const isBrowser = browserPatterns.some(pattern => ua.includes(pattern));
-
-  // 2. If it is a browser, but also contains a strong executor identifier, allow it.
-  //    Otherwise, block the browser.
   const isExplicitExecutor = executorPatterns.some(pattern => ua.includes(pattern));
 
   if (isBrowser && !isExplicitExecutor) {
@@ -123,10 +164,7 @@ function isAllowedUA(userAgent) {
     return false;
   }
   
-  // 3. If it is an explicit executor (isExplicitExecutor == true), OR it is not
-  //    a browser at all (isBrowser == false), allow it.
-  //    This logic ensures that if the client is not a known browser, or if it
-  //    explicitly names an executor, it is allowed to proceed.
+  // Allow if it is an explicit executor, or if it doesn't look like a browser at all.
   return isExplicitExecutor || !isBrowser;
 }
 
@@ -138,7 +176,6 @@ app.use(async (req, res, next) => {
     next(); 
   } 
   catch(err){ 
-    // This is the functional error handler that returns JSON
     console.error("Request failed during DB init:", err);
     res.status(500).json({ error: 'Failed to initialize database connection. Check MONGO_URI and IP whitelist.' }); 
   }
@@ -156,24 +193,28 @@ app.post('/admin/login', async (req,res)=>{
   res.json({ sessionToken });
 });
 
-// Create script route (POST /admin/create)
+// Create script route (POST /admin/create) - UPDATED TO OBFUSCATE
 app.post('/admin/create', async (req,res)=>{
-  const { payload } = req.body;
+  const { payload } = req.body; // 'payload' is now the raw Lua code from the client
   const sessionToken = req.headers['x-session-token'];
   const admins = db.collection('secure_lua_admins_v5');
   const admin = await admins.findOne({ sessionToken });
   if(!admin) return res.status(403).json({ error:'Unauthorized' });
   
+  // FIX: Encrypt the raw payload BEFORE storing it
+  const obfuscatedPayload = encryptLuaScript(payload);
+
   const scripts = db.collection('secure_lua_scripts_v5');
   const id = uuid();
-  await scripts.insertOne({ id,payload });
   
-  // Note: Vercel routes handle the host part correctly
+  // Store the obfuscated payload
+  await scripts.insertOne({ id, payload: obfuscatedPayload }); 
+  
   const rawUrl = `https://${req.headers.host}/raw/${id}`; 
   res.json({ rawUrl });
 });
 
-// Generate loader (GET /raw/:id)
+// Generate loader (GET /raw/:id) - LOADER IS BASE64 ENCODED
 app.get('/raw/:id', async (req,res)=>{
   const { id } = req.params;
   const ua = req.headers['user-agent'];
@@ -190,11 +231,11 @@ app.get('/raw/:id', async (req,res)=>{
   const runs = db.collection('secure_lua_runs_v5');
   await runs.insertOne({ token,nonce,scriptId:id,expiresAt,used:false });
 
-  // Lua HMAC-SHA256 Implementation 
+  // The loader payload fetches the blob securely and executes it via loadstring
   const loaderPayload = `
--- Pure Lua HMAC-SHA256 (Simplified and robust, assuming bitwise functions are available)
+-- Pure Lua HMAC-SHA256 (Assuming 'sha2' and 'bit' modules are available for proof generation)
 local function sha256_hex(s)
-  local hash = require("sha2") -- Executor must provide this global module
+  local hash = require("sha2") 
   if not hash then error("Missing 'sha2' module for HMAC") end
   return hash.sha256(s)
 end
@@ -243,6 +284,7 @@ local ok,res = pcall(function()
   })
 end)
 if ok and res and res.StatusCode==200 then
+  -- The response body is the obfuscated Lua code (wrapper + Base64 payload)
   loadstring(res.Body)()
 end
 `;
@@ -252,7 +294,7 @@ end
   res.send(loader);
 });
 
-// Serve script and verify security (GET /blob/:id)
+// Serve script and verify security (GET /blob/:id) - RETURNS OBFUSCATED LUA
 app.get('/blob/:id', async (req,res)=>{
   const { id } = req.params;
   const ua = req.headers['user-agent'];
@@ -290,8 +332,9 @@ app.get('/blob/:id', async (req,res)=>{
   const script = await scripts.findOne({id});
   if(!script) return res.status(404).send('Not found');
 
+  // The payload contains the fully obfuscated Lua script, ready for execution.
   res.setHeader('Content-Type','text/plain');
-  res.send(script.payload);
+  res.send(script.payload); 
 });
 
 module.exports = app;
