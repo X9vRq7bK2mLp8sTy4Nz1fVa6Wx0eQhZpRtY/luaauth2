@@ -62,12 +62,72 @@ function hmacSha256(key, data) {
 }
 
 // utils.js content
-const allowedUAs = ['synapse', 'krnl', 'fluxus', 'script-ware', 'scriptware', 'sentinel', 'executor', 'roblox', 'exploit', 'electron'];
-
+/**
+ * CHECK IF THE USER-AGENT IS FROM AN ALLOWED EXECUTOR ENVIRONMENT.
+ * This function uses the strict browser-blocking logic you requested,
+ * updated with the comprehensive list of executor identifiers.
+ */
 function isAllowedUA(userAgent) {
-  if (!userAgent) return false;
-  userAgent = userAgent.toLowerCase();
-  return allowedUAs.some(sub => userAgent.includes(sub));
+  if (!userAgent) {
+    return false;
+  }
+  
+  const ua = userAgent.toLowerCase();
+  
+  // List of common browser identifiers to block
+  const browserPatterns = [
+    'mozilla',
+    'chrome',
+    'safari',
+    'firefox',
+    'edge',
+    'opera',
+    'brave'
+  ];
+
+  // Expanded list of allowed executor/client identifiers
+  const executorPatterns = [
+    'synapse',
+    'krnl',
+    'fluxus',
+    'script-ware',
+    'scriptware',
+    'sentinel',
+    'electron',
+    'executor',
+    'roblox', // Roblox itself
+    'exploit',
+    // New additions based on your request:
+    'delta',
+    'sirhurt',
+    'xeno',
+    'solara', 
+    'potassium',
+    'bunni',
+    'lx63',
+    'cryptic',
+    'volcano',
+    'wave',
+    'zenith'
+  ];
+
+  // 1. Check if it looks like a browser
+  const isBrowser = browserPatterns.some(pattern => ua.includes(pattern));
+
+  // 2. If it is a browser, but also contains a strong executor identifier, allow it.
+  //    Otherwise, block the browser.
+  const isExplicitExecutor = executorPatterns.some(pattern => ua.includes(pattern));
+
+  if (isBrowser && !isExplicitExecutor) {
+    // If it looks like a browser AND does NOT contain any executor name, BLOCK it.
+    return false;
+  }
+  
+  // 3. If it is an explicit executor (isExplicitExecutor == true), OR it is not
+  //    a browser at all (isBrowser == false), allow it.
+  //    This logic ensures that if the client is not a known browser, or if it
+  //    explicitly names an executor, it is allowed to proceed.
+  return isExplicitExecutor || !isBrowser;
 }
 
 // --- Express Middleware & Routes ---
