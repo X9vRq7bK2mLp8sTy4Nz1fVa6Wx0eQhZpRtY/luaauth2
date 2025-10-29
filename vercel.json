@@ -2,16 +2,16 @@
   "version": 2,
   "rewrites": [
     { 
-      "source": "/api/(.*)", 
+      "source": "/api/admin/(.*)", 
       "destination": "/api/index.js" 
     },
     { 
       "source": "/raw/(.*)", 
-      "destination": "/api/index.js" 
+      "destination": "/api/index.js/raw/$1" 
     },
     { 
       "source": "/blob/(.*)", 
-      "destination": "/api/index.js" 
+      "destination": "/api/index.js/blob/$1" 
     }
   ],
   "headers": [
