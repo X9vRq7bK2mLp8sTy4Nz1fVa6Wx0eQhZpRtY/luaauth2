@@ -1,6 +1,29 @@
 {
-  "version":2,
-  "rewrites":[
-    { "source":"/api/(.*)", "destination":"/api/index.js" }
+  "version": 2,
+  "rewrites": [
+    { 
+      "source": "/api/(.*)", 
+      "destination": "/api/index.js" 
+    },
+    { 
+      "source": "/raw/(.*)", 
+      "destination": "/api/index.js" 
+    },
+    { 
+      "source": "/blob/(.*)", 
+      "destination": "/api/index.js" 
+    }
+  ],
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store, no-cache, must-revalidate, proxy-revalidate"
+        }
+      ]
+    }
   ]
 }
+
