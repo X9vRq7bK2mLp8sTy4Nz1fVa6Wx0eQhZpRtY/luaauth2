@@ -1,12 +1,38 @@
 const express = require('express');
+const { MongoClient } = require('mongodb'); // Moved from mongo.js
 const { v4: uuid } = require('uuid');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
-// FIX: Changed relative path from '..' to '.' since files are now in the same directory
-const connectToMongo = require('./mongo.js'); 
-const { base64Encode, hmacSha256 } = require('./encryption.js');
-const { isAllowedUA } = require('./utils.js');
 
+// --- 1. Encryption Functions (Moved from encryption.js) ---
+function base64Encode(str) {
+  return Buffer.from(str).toString('base64');
+}
+
+function hmacSha256(key, data) {
+  return crypto.createHmac('sha256', key).update(data).digest('hex');
+}
+
+// --- 2. Utils Functions (Moved from utils.js) ---
+const allowedUAs = ['synapse', 'krnl', 'fluxus', 'script-ware', 'scriptware', 'sentinel', 'executor', 'roblox', 'exploit', 'electron'];
+
+function isAllowedUA(userAgent) {
+  if (!userAgent) return false;
+  userAgent = userAgent.toLowerCase();
+  return allowedUAs.some(sub => userAgent.includes(sub));
+}
+
+// --- 3. Mongo Connection (Moved from mongo.js) ---
+async function connectToMongo(uri) {
+  const client = new MongoClient(uri);
+  await client.connect();
+  const db = client.db('lua_protector');
+  // Ensures runs expire after 0 seconds when their time is past
+  await db.collection('secure_lua_runs_v5').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+  return db;
+}
+
+// --- 4. Express App Setup ---
 const app = express();
 app.use(express.json());
 
@@ -21,7 +47,7 @@ async function initDb() {
   if (db) return db;
   if (!initPromise) {
     initPromise = (async () => {
-      try { // Added try/catch around connection for better error feedback
+      try {
         db = await connectToMongo(MONGO_URI);
         const admins = db.collection('secure_lua_admins_v5');
         const admin = await admins.findOne({ username: ADMIN_USERNAME });
@@ -31,22 +57,23 @@ async function initDb() {
         }
         return db;
       } catch (err) {
-        console.error("MongoDB Initialization Error:", err);
-        // Re-throw the error to ensure the calling function catches it
-        throw new Error("Failed to initialize database connection."); 
+        console.error("CRITICAL DB INIT ERROR:", err.message);
+        throw new Error("Failed to initialize database connection. Check MONGO_URI and IP whitelist."); 
       }
     })();
   }
   return initPromise;
 }
 
+// Middleware to initialize DB and catch early failures
 app.use(async (req, res, next) => {
   try { await initDb(); next(); }
-  // This catch block is now more likely to run if the DB fails AFTER startup
-  catch(err){ res.status(500).json({error:'Database connection failed'}); }
+  catch(err){ res.status(500).json({error: err.message || 'Database initialization failed'}); }
 });
 
-// admin login
+// --- 5. Endpoints ---
+
+// admin login endpoint
 app.post('/admin/login', async (req,res)=>{
   const { username,password } = req.body;
   const admins = db.collection('secure_lua_admins_v5');
@@ -58,7 +85,7 @@ app.post('/admin/login', async (req,res)=>{
   res.json({ sessionToken });
 });
 
-// create script
+// create script endpoint
 app.post('/admin/create', async (req,res)=>{
   const { payload } = req.body;
   const sessionToken = req.headers['x-session-token'];
@@ -68,7 +95,7 @@ app.post('/admin/create', async (req,res)=>{
   const scripts = db.collection('secure_lua_scripts_v5');
   const id = uuid();
   await scripts.insertOne({ id,payload });
-  const rawUrl = `https://${req.headers.host}/api/raw/${id}`;
+  const rawUrl = `https://${req.headers.host}/api/raw/${id}`; 
   res.json({ rawUrl });
 });
 
@@ -90,7 +117,7 @@ app.get('/raw/:id', async (req,res)=>{
   await runs.insertOne({ token,nonce,scriptId:id,expiresAt,used:false });
 
   const loaderPayload = `
--- Pure Lua HMAC-SHA256 (Executor must provide a 'hash.sha256' function)
+-- Lua Loader with HMAC-SHA256 Proof of Execution
 local HttpService = game:GetService("HttpService")
 local playerId = game.Players.LocalPlayer.UserId
 local token = "${token}"
@@ -98,9 +125,18 @@ local nonce = "${nonce}"
 local ts = os.time()
 local blobUrl = "https://${req.headers.host}/api/blob/${id}"
 
+-- Assumes the executor provides a global 'hash' library with a 'sha256' HMAC function
+local function hmac_sha256(key, data)
+    if typeof(hash) == "table" and typeof(hash.sha256) == "function" then
+        return hash.sha256(key, data)
+    end
+    -- Fallback/Error: If hash.sha256 is not available, the proof will be empty/invalid
+    return "" 
+end
+
 -- Key: token. Data: token + nonce + playerId + ts
 local data = token..nonce..tostring(playerId)..tostring(ts) 
-local proof = hash.sha256(token, data)
+local proof = hmac_sha256(token, data)
 
 local ok,res = pcall(function()
   return HttpService:RequestAsync({
@@ -116,7 +152,7 @@ local ok,res = pcall(function()
   })
 end)
 if ok and res and res.StatusCode==200 then
-  -- Suppress output before loading the script
+  -- Basic output suppression for cleaner execution
   local oldPrint, oldWarn = print, warn
   print = function() end
   warn = function() end
@@ -161,6 +197,7 @@ app.get('/blob/:id', async (req,res)=>{
   );
   if(!run.value) return res.status(403).send('Invalid token or token already used');
 
+  // HMAC Verification: Key is 'token', Data is 'token + nonce + playerId + tsStr'
   const data = token + run.value.nonce + playerId + tsStr;
   const expectedProof = hmacSha256(token,data);
   if(proof!==expectedProof) return res.status(403).send('Invalid proof');
