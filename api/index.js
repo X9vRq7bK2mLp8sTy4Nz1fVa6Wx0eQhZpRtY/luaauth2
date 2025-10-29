@@ -2,10 +2,10 @@ const express = require('express');
 const { v4: uuid } = require('uuid');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
-// Paths must point back up one directory level: ../
-const connectToMongo = require('../mongo.js');
-const { base64Encode, hmacSha256 } = require('../encryption.js');
-const { isAllowedUA } = require('../utils.js');
+// FIX: Changed relative path from '..' to '.' since files are now in the same directory
+const connectToMongo = require('./mongo.js'); 
+const { base64Encode, hmacSha256 } = require('./encryption.js');
+const { isAllowedUA } = require('./utils.js');
 
 const app = express();
 app.use(express.json());
@@ -21,15 +21,20 @@ async function initDb() {
   if (db) return db;
   if (!initPromise) {
     initPromise = (async () => {
-      // Note: mongo.js handles client connection and index creation
-      db = await connectToMongo(MONGO_URI); 
-      const admins = db.collection('secure_lua_admins_v5');
-      const admin = await admins.findOne({ username: ADMIN_USERNAME });
-      if (!admin) {
-        const hash = await bcrypt.hash(ADMIN_PASSWORD, 10);
-        await admins.insertOne({ username: ADMIN_USERNAME, passwordHash: hash, sessionToken: null });
+      try { // Added try/catch around connection for better error feedback
+        db = await connectToMongo(MONGO_URI);
+        const admins = db.collection('secure_lua_admins_v5');
+        const admin = await admins.findOne({ username: ADMIN_USERNAME });
+        if (!admin) {
+          const hash = await bcrypt.hash(ADMIN_PASSWORD, 10);
+          await admins.insertOne({ username: ADMIN_USERNAME, passwordHash: hash, sessionToken: null });
+        }
+        return db;
+      } catch (err) {
+        console.error("MongoDB Initialization Error:", err);
+        // Re-throw the error to ensure the calling function catches it
+        throw new Error("Failed to initialize database connection."); 
       }
-      return db;
     })();
   }
   return initPromise;
@@ -37,10 +42,11 @@ async function initDb() {
 
 app.use(async (req, res, next) => {
   try { await initDb(); next(); }
+  // This catch block is now more likely to run if the DB fails AFTER startup
   catch(err){ res.status(500).json({error:'Database connection failed'}); }
 });
 
-// admin login endpoint
+// admin login
 app.post('/admin/login', async (req,res)=>{
   const { username,password } = req.body;
   const admins = db.collection('secure_lua_admins_v5');
@@ -52,7 +58,7 @@ app.post('/admin/login', async (req,res)=>{
   res.json({ sessionToken });
 });
 
-// create script endpoint
+// create script
 app.post('/admin/create', async (req,res)=>{
   const { payload } = req.body;
   const sessionToken = req.headers['x-session-token'];
@@ -62,8 +68,7 @@ app.post('/admin/create', async (req,res)=>{
   const scripts = db.collection('secure_lua_scripts_v5');
   const id = uuid();
   await scripts.insertOne({ id,payload });
-  // The raw URL points back to this serverless function
-  const rawUrl = `https://${req.headers.host}/api/raw/${id}`; 
+  const rawUrl = `https://${req.headers.host}/api/raw/${id}`;
   res.json({ rawUrl });
 });
 
@@ -84,13 +89,8 @@ app.get('/raw/:id', async (req,res)=>{
   const runs = db.collection('secure_lua_runs_v5');
   await runs.insertOne({ token,nonce,scriptId:id,expiresAt,used:false });
 
-  // Lua HMAC-SHA256 Implementation (Simplified for better portability)
   const loaderPayload = `
--- Fix 1: Removed complex bit/sha2 requirements for better portability.
--- Most modern executors provide a global hash function (e.g., hash.sha256).
--- The executor must ensure 'hash.sha256' is available or replace it 
--- with its own signature function.
-
+-- Pure Lua HMAC-SHA256 (Executor must provide a 'hash.sha256' function)
 local HttpService = game:GetService("HttpService")
 local playerId = game.Players.LocalPlayer.UserId
 local token = "${token}"
@@ -100,7 +100,7 @@ local blobUrl = "https://${req.headers.host}/api/blob/${id}"
 
 -- Key: token. Data: token + nonce + playerId + ts
 local data = token..nonce..tostring(playerId)..tostring(ts) 
-local proof = hash.sha256(token, data) -- Assuming 'hash.sha256' is the global HMAC function
+local proof = hash.sha256(token, data)
 
 local ok,res = pcall(function()
   return HttpService:RequestAsync({
@@ -151,7 +151,6 @@ app.get('/blob/:id', async (req,res)=>{
 
   const ts = parseInt(tsStr);
   const now = Math.floor(Date.now()/1000);
-  // Allow 10 seconds of time drift
   if(Math.abs(now-ts)>10) return res.status(403).send('Invalid timestamp');
 
   const runs = db.collection('secure_lua_runs_v5');
@@ -162,10 +161,8 @@ app.get('/blob/:id', async (req,res)=>{
   );
   if(!run.value) return res.status(403).send('Invalid token or token already used');
 
-  // HMAC Verification: Key is 'token', Data is 'token + nonce + playerId + tsStr'
   const data = token + run.value.nonce + playerId + tsStr;
   const expectedProof = hmacSha256(token,data);
-  
   if(proof!==expectedProof) return res.status(403).send('Invalid proof');
 
   const scripts = db.collection('secure_lua_scripts_v5');
