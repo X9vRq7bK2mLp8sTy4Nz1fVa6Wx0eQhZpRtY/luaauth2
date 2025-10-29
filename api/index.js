@@ -3,7 +3,6 @@ const { MongoClient } = require('mongodb');
 const { v4: uuid } = require('uuid');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
-const path = require('path');
 
 const app = express();
 app.use(express.json());
@@ -61,75 +60,55 @@ function hmacSha256(key, data) {
 }
 
 /**
- * Generates random variable names for basic obfuscation.
+ * Generates random, ugly variable names.
  */
-function generateRandomVarNames(count) {
-  const names = [];
-  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
-  
-  for (let i = 0; i < count; i++) {
-    let name = '_';
-    const length = Math.floor(Math.random() * 8) + 8; // 8-16 chars
-    for (let j = 0; j < length; j++) {
-      name += chars[Math.floor(Math.random() * chars.length)];
-    }
-    names.push(name);
+function generateRandomVarName() {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let name = '';
+  const length = Math.floor(Math.random() * 5) + 6; // 6-10 chars
+  for (let j = 0; j < length; j++) {
+    name += chars[Math.floor(Math.random() * chars.length)];
   }
-  return names;
+  return name;
 }
 
 /**
- * Wraps the raw Lua code in an obfuscated Base64 decoder wrapper.
- * This is the crucial fix for execution errors.
+ * Wraps the raw Lua code in an extremely compressed and ugly Base64 decoder wrapper.
  */
 function encryptLuaScript(code) {
-  // 1. Base64 encode the script's core content
   const base64Code = Buffer.from(code).toString('base64');
   
-  const varNames = generateRandomVarNames(2);
-  const [v1, v2] = varNames; // v1 holds the payload, v2 holds the decoder function
-
-  // The Pure Lua Decoder uses standard arithmetic, not the unreliable string.gsub patterns.
-  // This is the most reliable way to perform Base64 decoding in various Lua environments.
-  const obfuscated = `
--- LuaShield Protected Script (Fixed Decoding)
--- Generated: ${new Date().toISOString()}
-
-local ${v1} = '${base64Code}'
-
--- Standard Pure Lua Base64 Decoder (Loop-based for reliability)
-local ${v2} = (function()
-    local map = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-    local lookup = {}
-    for i=1, #map do lookup[map:sub(i,i)] = i - 1 end
-
-    return function(b64)
-        local s = ''
-        local i1, i2, i3, i4
-        for i=1, #b64, 4 do
-            i1 = lookup[b64:sub(i, i)]
-            i2 = lookup[b64:sub(i+1, i+1)]
-            i3 = lookup[b64:sub(i+2, i+2)]
-            i4 = lookup[b64:sub(i+3, i+3)]
-            
-            -- Combine 6-bit chunks into 8-bit bytes using arithmetic
-            s = s .. string.char(i1 * 4 + math.floor(i2 / 16))
-            if i3 and b64:sub(i+2, i+2) ~= '=' then
-                s = s .. string.char((i2 % 16) * 16 + math.floor(i3 / 4))
-            end
-            if i4 and b64:sub(i+3, i+3) ~= '=' then
-                s = s .. string.char((i3 % 4) * 64 + i4)
-            end
-        end
-        return s
+  // Generating extremely compressed and random variable names
+  const V1 = generateRandomVarName(); // payload
+  const V2 = generateRandomVarName(); // decoder func
+  const V3 = generateRandomVarName(); // map
+  const V4 = generateRandomVarName(); // lookup
+  const V5 = generateRandomVarName(); // result string
+  
+  // This is the highly compressed, ugly, and reliable pure Lua Base64 Decoder (Loop-based arithmetic)
+  const decoderLua = `
+local ${V1}="${base64Code}"
+local ${V3}="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+local ${V4}={}
+for I=1,#${V3} do ${V4}[${V3}:sub(I,I)]=I-1 end
+local ${V2}=function(S)
+  local ${V5}=""
+  for I=1,#S,4 do
+    local I1,I2,I3,I4=${V4}[S:sub(I,I)],${V4}[S:sub(I+1,I+1)],${V4}[S:sub(I+2,I+2)],${V4}[S:sub(I+3,I+3)]
+    ${V5}=${V5}..string.char(I1*4+math.floor(I2/16))
+    if I3 and S:sub(I+2,I+2)~="=" then
+      ${V5}=${V5}..string.char((I2%16)*16+math.floor(I3/4))
     end
-end)()
+    if I4 and S:sub(I+3,I+3)~="=" then
+      ${V5}=${V5}..string.char((I3%4)*64+I4)
+    end
+  end
+  return ${V5}
+end
+loadstring(${V2}(${V1}))()
+`.trim().replace(/\n/g, '').replace(/;;/g, ';'); // Final cleanup for maximum compression
 
--- Decode and execute the original script
-loadstring(${v2}(${v1}))()
-`.trim();
-
-  return obfuscated;
+  return decoderLua;
 }
 
 /**
@@ -142,13 +121,11 @@ function isAllowedUA(userAgent) {
   
   const ua = userAgent.toLowerCase();
   
-  // List of common browser identifiers to block
   const browserPatterns = [
     'mozilla', 'chrome', 'safari', 'firefox',
     'edge', 'opera', 'brave'
   ];
 
-  // Expanded list of allowed executor/client identifiers
   const executorPatterns = [
     'synapse', 'krnl', 'fluxus', 'script-ware', 'scriptware', 'sentinel',
     'electron', 'executor', 'roblox', 'exploit', 'delta', 'sirhurt',
@@ -160,11 +137,9 @@ function isAllowedUA(userAgent) {
   const isExplicitExecutor = executorPatterns.some(pattern => ua.includes(pattern));
 
   if (isBrowser && !isExplicitExecutor) {
-    // If it looks like a browser AND does NOT contain any executor name, BLOCK it.
     return false;
   }
   
-  // Allow if it is an explicit executor, or if it doesn't look like a browser at all.
   return isExplicitExecutor || !isBrowser;
 }
 
@@ -195,19 +170,17 @@ app.post('/admin/login', async (req,res)=>{
 
 // Create script route (POST /admin/create) - UPDATED TO OBFUSCATE
 app.post('/admin/create', async (req,res)=>{
-  const { payload } = req.body; // 'payload' is now the raw Lua code from the client
+  const { payload } = req.body; 
   const sessionToken = req.headers['x-session-token'];
   const admins = db.collection('secure_lua_admins_v5');
   const admin = await admins.findOne({ sessionToken });
   if(!admin) return res.status(403).json({ error:'Unauthorized' });
   
-  // FIX: Encrypt the raw payload BEFORE storing it
   const obfuscatedPayload = encryptLuaScript(payload);
 
   const scripts = db.collection('secure_lua_scripts_v5');
   const id = uuid();
   
-  // Store the obfuscated payload
   await scripts.insertOne({ id, payload: obfuscatedPayload }); 
   
   const rawUrl = `https://${req.headers.host}/raw/${id}`; 
@@ -231,9 +204,8 @@ app.get('/raw/:id', async (req,res)=>{
   const runs = db.collection('secure_lua_runs_v5');
   await runs.insertOne({ token,nonce,scriptId:id,expiresAt,used:false });
 
-  // The loader payload fetches the blob securely and executes it via loadstring
   const loaderPayload = `
--- Pure Lua HMAC-SHA256 (Assuming 'sha2' and 'bit' modules are available for proof generation)
+-- Pure Lua HMAC-SHA256 (Assuming 'sha2' and 'bit' modules are available)
 local function sha256_hex(s)
   local hash = require("sha2") 
   if not hash then error("Missing 'sha2' module for HMAC") end
@@ -284,7 +256,6 @@ local ok,res = pcall(function()
   })
 end)
 if ok and res and res.StatusCode==200 then
-  -- The response body is the obfuscated Lua code (wrapper + Base64 payload)
   loadstring(res.Body)()
 end
 `;
@@ -332,7 +303,6 @@ app.get('/blob/:id', async (req,res)=>{
   const script = await scripts.findOne({id});
   if(!script) return res.status(404).send('Not found');
 
-  // The payload contains the fully obfuscated Lua script, ready for execution.
   res.setHeader('Content-Type','text/plain');
   res.send(script.payload); 
 });
