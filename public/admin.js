@@ -1,7 +1,8 @@
 function login() {
   const username = document.getElementById('username').value;
   const password = document.getElementById('password').value;
-  fetch('/api/admin/login', {
+  // Route is now just /admin/login
+  fetch('/admin/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password })
@@ -13,13 +14,14 @@ function login() {
         document.getElementById('login').style.display = 'none';
         document.getElementById('admin').style.display = 'block';
       }
-    }).catch(err => alert(err));
+    }).catch(err => alert("Connection Error. Check Vercel logs."));
 }
 
 function createScript() {
   const payload = document.getElementById('payload').value;
   const sessionToken = localStorage.getItem('sessionToken');
-  fetch('/api/admin/create', {
+  // Route is now just /admin/create
+  fetch('/admin/create', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -30,5 +32,6 @@ function createScript() {
     .then(data => {
       if (data.error) alert(data.error);
       else document.getElementById('url').innerText = `Raw URL: ${data.rawUrl}`;
-    }).catch(err => alert(err));
+    }).catch(err => alert("Connection Error. Check Vercel logs."));
 }
+
