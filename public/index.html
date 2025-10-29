@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Lua Script Protector</title>
+  <script src="/admin.js"></script>
+  <style>
+    body { font-family: Arial; margin: 20px; }
+    input, textarea { display: block; margin: 10px 0; }
+    textarea { width: 500px; height: 300px; }
+  </style>
+</head>
+<body>
+  <div id="login">
+    <input id="username" placeholder="Username">
+    <input id="password" type="password" placeholder="Password">
+    <button onclick="login()">Login</button>
+  </div>
+  <div id="admin" style="display:none;">
+    <textarea id="payload" placeholder="Paste obfuscated Lua script"></textarea>
+    <button onclick="createScript()">Create</button>
+    <div id="url"></div>
+  </div>
+</body>
+</html>
