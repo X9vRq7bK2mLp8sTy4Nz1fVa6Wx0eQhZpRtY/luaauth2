@@ -1,22 +1,22 @@
 {
   "version": 2,
   "rewrites": [
-    { 
-      "source": "/api/admin/(.*)", 
-      "destination": "/api/index.js" 
+    {
+      "source": "/(admin/.*)",
+      "destination": "/api/index.js"
     },
-    { 
-      "source": "/raw/(.*)", 
-      "destination": "/api/index.js/raw/$1" 
+    {
+      "source": "/(raw/.*)",
+      "destination": "/api/index.js"
     },
-    { 
-      "source": "/blob/(.*)", 
-      "destination": "/api/index.js/blob/$1" 
+    {
+      "source": "/(blob/.*)",
+      "destination": "/api/index.js"
     }
   ],
   "headers": [
     {
-      "source": "/api/(.*)",
+      "source": "/(.*)",
       "headers": [
         {
           "key": "Cache-Control",
